@@ -1,0 +1,5 @@
+.venv/
+airflow_home/
+chegada/
+.env
+__pycache__/
