@@ -9,13 +9,14 @@ Cada tarefa grava UM arquivo por coleta em  <CHEGADA_DIR>/<fonte>/<fonte>_<AAAAM
 
 Variables do Airflow (nenhuma chave no código, req. 03):
   CHEGADA_DIR         pasta de pouso            (padrão /opt/airflow/chegada)
-  CEMADEN_URL         endpoint do Mapa Interativo (confirme no DevTools; ver README)
+  CEMADEN_URL         endpoint do Mapa Interativo (opcional; o padrão já é o endereço real)
   ALERTA_WEBHOOK_URL  webhook (Discord/Slack) para notificar falhas (opcional)
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import timedelta
 from pathlib import Path
 
@@ -34,6 +35,8 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 # O endpoint do CEMADEN mostra só o presente. Uma execução retroativa (catchup) rotularia a foto de hoje
 # com data antiga, então a tarefa só coleta se a execução for recente.
 JANELA_RECENTE = timedelta(hours=12)
+# Endereço real, achado no DevTools do Mapa Interativo (aba Rede, Fetch/XHR). Devolve JSONP: estacoes([...]).
+CEMADEN_URL_PADRAO = "https://resources.cemaden.gov.br/dados/327mi_24.json?callback=estacoes"
 
 
 # --------------------------------------------------------------------------- utilidades
@@ -50,6 +53,23 @@ def _arquivo(fonte: str, data_interval_end) -> Path:
 def _gravar(caminho: Path, conteudo: dict) -> None:
     caminho.write_text(json.dumps(conteudo, ensure_ascii=False), encoding="utf-8")
     log.info("Arquivo gravado: %s (%d bytes)", caminho, caminho.stat().st_size)
+
+
+def _json_de_jsonp(texto: str):
+    """O CEMADEN responde em JSONP: estacoes([...]). Remove o 'estacoes(' e o ')' final e lê o JSON."""
+    t = texto.strip()
+    if t.startswith(("[", "{")):
+        return json.loads(t)
+    m = re.match(r"^[\w$.]+\((.*)\)\s*;?\s*$", t, re.S)
+    if not m:
+        raise ValueError(f"Resposta do CEMADEN não é JSON nem JSONP: {t[:120]!r}")
+    return json.loads(m.group(1))
+
+
+def _lista_estacoes(payload) -> list[dict]:
+    """O JSON vem como [{"estacao": [ {...}, {...} ]}]. Devolve a lista de estações."""
+    blocos = payload if isinstance(payload, list) else [payload]
+    return [e for b in blocos for e in b.get("estacao", [])]
 
 
 def notificar_falha(context) -> None:
@@ -99,17 +119,22 @@ def coletar_chuva(data_interval_start, data_interval_end, **_):
 
 
 def coletar_cemaden(data_interval_end, **_):
-    """Foto atual dos pluviômetros automáticos do CEMADEN (acumulados 1 a 96 h). Fonte externa real."""
+    """Foto atual das estações do CEMADEN (pluviométricas e hidrológicas). Fonte externa real."""
     if pendulum.now("UTC") - data_interval_end > JANELA_RECENTE:
         raise AirflowSkipException("Execução retroativa: o endpoint do CEMADEN só mostra o presente.")
 
-    url = Variable.get("CEMADEN_URL", "http://sjc.salvar.cemaden.gov.br/resources/graficos/interativo/getJson2.php?uf=SP")
-    resp = requests.get(url, timeout=60)
+    url = Variable.get("CEMADEN_URL", CEMADEN_URL_PADRAO)
+    resp = requests.get(url, timeout=60, headers={"User-Agent": "Mozilla/5.0 (GS-FIAP Alerta Corrego)"})
     resp.raise_for_status()
+    estacoes = _lista_estacoes(_json_de_jsonp(resp.text))
+    sp = [e for e in estacoes if e.get("uf") == "SP"]  # o arquivo cobre o Brasil: só SP vai para o pouso
+    if not sp:
+        raise ValueError(f"Nenhuma estação de SP em {len(estacoes)} estações recebidas: formato mudou?")
+    log.info("CEMADEN: %d estações no arquivo, %d em SP", len(estacoes), len(sp))
     _gravar(_arquivo("cemaden", data_interval_end), {
         "coletado_em_utc": pendulum.now("UTC").isoformat(),
-        "fonte": url,
-        "dados": resp.json(),  # bruto, sem tratamento: a Bronze guarda como veio (o CEMADEN entrega em UTC)
+        "fonte": url, "total_estacoes_brasil": len(estacoes),
+        "dados": sp,  # sem outro tratamento: a Bronze guarda como veio
     })
 
 

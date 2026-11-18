@@ -24,14 +24,16 @@ CAT, SCH, SCH_RESTRITO = "workspace", "gs", "gs_restrito"
 PICO_CM = 80          # salto isolado de nível entre leituras de 10 min tratado como pico (ajuste se necessário)
 PRECIP_MAX_MM_H = 150  # acima disto é fisicamente suspeito
 
-# Mapeamento do JSON do CEMADEN. NÃO foi confirmado: rode printSchema() na Bronze e ajuste os nomes à direita.
+# Campos do JSON do CEMADEN (endpoint 327mi_24.json, confirmado no DevTools). Nome na Prata: nome no JSON.
 CAMPOS_CEMADEN = {
-    "estacao_id": "codestacao", "estacao_nome": "nome", "municipio": "cidade",
-    "latitude": "latitude", "longitude": "longitude",
-    "acc_1h": "acc1hr", "acc_3h": "acc3hr", "acc_6h": "acc6hr", "acc_12h": "acc12hr",
-    "acc_24h": "acc24hr", "acc_48h": "acc48hr", "acc_72h": "acc72hr", "acc_96h": "acc96hr",
+    "estacao_id": "codestacao", "estacao_nome": "nomeestacao", "municipio": "cidade", "uf": "uf",
+    "tipo": "tipoestacao", "status": "status", "latitude": "latitude", "longitude": "longitude",
+    "acumulado_mm": "acumulado", "nivel": "nivel",
+    "cota_atencao": "cotaatencao", "cota_alerta": "cotaalerta", "cota_transbordamento": "cotatransbordamento",
 }
-ORDEM_ACC = ["acc_1h", "acc_3h", "acc_6h", "acc_12h", "acc_24h", "acc_48h", "acc_72h", "acc_96h"]
+# O sufixo _24 do arquivo sugere acumulado de 24 h. CONFIRME (veja se há 327mi_1.json, 327mi_3.json... no Network).
+JANELA_ACUMULADO_H = 24
+ACUMULADO_MAX_MM = 500
 
 LOTE_TS = F.regexp_extract("arquivo_origem", r"_(\d{8}T\d{4})\.json", 1).alias("lote_ts")
 
@@ -101,18 +103,21 @@ def prata_cemaden(b):
     if faltando:
         raise ValueError(f"Campos ausentes no JSON do CEMADEN: {faltando}. Colunas disponíveis: {e.columns}")
     c = e.select(LOTE_TS, "coletado_em", *[F.col(v).alias(k) for k, v in CAMPOS_CEMADEN.items()])
-    for k in ORDEM_ACC + ["latitude", "longitude"]:
+    for k in ["latitude", "longitude", "acumulado_mm", "nivel", "cota_atencao", "cota_alerta", "cota_transbordamento"]:
         c = c.withColumn(k, F.col(k).cast("double"))
+    c = c.withColumn("janela_acumulado_h", F.lit(JANELA_ACUMULADO_H))
     # só o município de São Paulo (filtro informativo, não é regra de qualidade)
     mun = F.upper(F.translate("municipio", "ÃÁÂÀÉÊÍÓÔÕÚÇ", "AAAAEEIOOOUC"))
     fora = c.filter(mun != "SAO PAULO").count()
     REGRAS_LOG.append(("cemaden", "filtro_fora_do_municipio_de_sao_paulo", fora))
     c = c.filter(mun == "SAO PAULO")
-    # acumulados precisam crescer com a janela: 1h <= 3h <= ... <= 96h
-    viola = reduce(lambda a, b_: a | b_, [
-        F.coalesce(F.col(x) > F.col(y), F.lit(False)) for x, y in zip(ORDEM_ACC, ORDEM_ACC[1:])])
-    c = barrar(c, "cemaden", "acumulados_nao_crescem_com_a_janela", viola, ["estacao_id", "coletado_em"])
-    return manter_mais_recente(c, "cemaden", ["estacao_id", "coletado_em"], ["lote_ts"])
+    chave = ["estacao_id", "coletado_em"]
+    c = barrar(c, "cemaden", "estacao_inativa_status_0", F.coalesce(F.col("status") == 0, F.lit(False)), chave)
+    a_ = F.col("acumulado_mm")
+    c = barrar(c, "cemaden", f"acumulado_negativo_ou_acima_de_{ACUMULADO_MAX_MM}mm",
+               F.coalesce((a_ < 0) | (a_ > ACUMULADO_MAX_MM), F.lit(False)), chave)
+    c = barrar(c, "cemaden", "nivel_negativo", F.coalesce(F.col("nivel") < 0, F.lit(False)), chave)
+    return manter_mais_recente(c, "cemaden", chave, ["lote_ts"])
 
 
 def prata_cadastro(b):
