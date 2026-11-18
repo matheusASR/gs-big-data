@@ -201,3 +201,4 @@ for t in [f"{SCH}.prata_chuva_hora", f"{SCH}.prata_nivel_corrego", f"{SCH}.prata
           f"{SCH_RESTRITO}.prata_morador"]:
     if spark.catalog.tableExists(f"{CAT}.{t}"):
         print(t, spark.table(f"{CAT}.{t}").count())
+display(spark.table(f"{CAT}.{SCH}.log_qualidade").orderBy(F.col("executado_em").desc()).limit(20))
