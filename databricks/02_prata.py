@@ -24,16 +24,19 @@ CAT, SCH, SCH_RESTRITO = "workspace", "gs", "gs_restrito"
 PICO_CM = 80          # salto isolado de nível entre leituras de 10 min tratado como pico (ajuste se necessário)
 PRECIP_MAX_MM_H = 150  # acima disto é fisicamente suspeito
 
-# Campos do JSON do CEMADEN (endpoint 327mi_24.json, confirmado no DevTools). Nome na Prata: nome no JSON.
+# Campos do JSON do CEMADEN (arquivos 311_24 pluviométricas e 327mi_24 hidrológicas, confirmados no DevTools).
+# Nome na Prata: nome no JSON. `status` NÃO significa "inativa" (quase todas as pluviométricas têm 0 e têm leitura).
 CAMPOS_CEMADEN = {
     "estacao_id": "codestacao", "estacao_nome": "nomeestacao", "municipio": "cidade", "uf": "uf",
     "tipo": "tipoestacao", "status": "status", "latitude": "latitude", "longitude": "longitude",
-    "acumulado_mm": "acumulado", "nivel": "nivel",
+    "acumulado_mm": "acumulado", "nivel": "nivel", "observado_utc": "atualizado_utc",
     "cota_atencao": "cotaatencao", "cota_alerta": "cotaalerta", "cota_transbordamento": "cotatransbordamento",
 }
-# O sufixo _24 do arquivo sugere acumulado de 24 h. CONFIRME (veja se há 327mi_1.json, 327mi_3.json... no Network).
+# O sufixo _24 dos arquivos sugere acumulado de 24 h. CONFIRME antes de comparar com a chuva do Open-Meteo.
 JANELA_ACUMULADO_H = 24
 ACUMULADO_MAX_MM = 500
+# Municípios mantidos (sem acento, maiúsculas): a capital e as vizinhas a leste, com estação hidrológica.
+MUNICIPIOS_CEMADEN = ["SAO PAULO", "POA", "SUZANO"]
 
 LOTE_TS = F.regexp_extract("arquivo_origem", r"_(\d{8}T\d{4})\.json", 1).alias("lote_ts")
 
@@ -105,14 +108,19 @@ def prata_cemaden(b):
     c = e.select(LOTE_TS, "coletado_em", *[F.col(v).alias(k) for k, v in CAMPOS_CEMADEN.items()])
     for k in ["latitude", "longitude", "acumulado_mm", "nivel", "cota_atencao", "cota_alerta", "cota_transbordamento"]:
         c = c.withColumn(k, F.col(k).cast("double"))
-    c = c.withColumn("janela_acumulado_h", F.lit(JANELA_ACUMULADO_H))
-    # só o município de São Paulo (filtro informativo, não é regra de qualidade)
+    # horário da observação: o "atualizado" do arquivo (UTC); se faltar, o horário da coleta
+    c = (c.withColumn("observado_em", F.coalesce(F.to_timestamp("observado_utc"), F.col("coletado_em")))
+          .drop("observado_utc")
+          .withColumn("janela_acumulado_h", F.lit(JANELA_ACUMULADO_H)))
+    # só os municípios de interesse (filtro informativo, não é regra de qualidade)
     mun = F.upper(F.translate("municipio", "ÃÁÂÀÉÊÍÓÔÕÚÇ", "AAAAEEIOOOUC"))
-    fora = c.filter(mun != "SAO PAULO").count()
-    REGRAS_LOG.append(("cemaden", "filtro_fora_do_municipio_de_sao_paulo", fora))
-    c = c.filter(mun == "SAO PAULO")
-    chave = ["estacao_id", "coletado_em"]
-    c = barrar(c, "cemaden", "estacao_inativa_status_0", F.coalesce(F.col("status") == 0, F.lit(False)), chave)
+    fora = c.filter(~mun.isin(MUNICIPIOS_CEMADEN)).count()
+    REGRAS_LOG.append(("cemaden", "filtro_fora_dos_municipios_de_interesse", fora))
+    c = c.filter(mun.isin(MUNICIPIOS_CEMADEN))
+    chave = ["estacao_id", "observado_em"]
+    sem_leitura = ((F.col("tipo") == "Pluviométrica") & F.col("acumulado_mm").isNull()) | \
+                  ((F.col("tipo") == "Hidrológica") & F.col("nivel").isNull())
+    c = barrar(c, "cemaden", "estacao_sem_leitura", F.coalesce(sem_leitura, F.lit(False)), chave)
     a_ = F.col("acumulado_mm")
     c = barrar(c, "cemaden", f"acumulado_negativo_ou_acima_de_{ACUMULADO_MAX_MM}mm",
                F.coalesce((a_ < 0) | (a_ > ACUMULADO_MAX_MM), F.lit(False)), chave)
@@ -165,7 +173,7 @@ mesclar(prata_sensor(B("sensor")), f"{CAT}.{SCH}.prata_nivel_corrego", ["ponto_i
 mesclar(prata_cadastro(B("cadastro")), f"{CAT}.{SCH_RESTRITO}.prata_morador", ["morador_id"], "lote_cadastro")
 if spark.catalog.tableExists(f"{CAT}.{SCH}.bronze_cemaden"):
     mesclar(prata_cemaden(B("cemaden")), f"{CAT}.{SCH}.prata_cemaden_estacao",
-            ["estacao_id", "coletado_em"], "lote_cemaden")
+            ["estacao_id", "observado_em"], "lote_cemaden")
 
 # COMMAND ----------
 # >>> EXECUÇÃO

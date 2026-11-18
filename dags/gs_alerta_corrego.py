@@ -9,7 +9,7 @@ Cada tarefa grava UM arquivo por coleta em  <CHEGADA_DIR>/<fonte>/<fonte>_<AAAAM
 
 Variables do Airflow (nenhuma chave no código, req. 03):
   CHEGADA_DIR         pasta de pouso            (padrão /opt/airflow/chegada)
-  CEMADEN_URL         endpoint do Mapa Interativo (opcional; o padrão já é o endereço real)
+  CEMADEN_URLS        lista JSON de endereços do CEMADEN (opcional; o padrão já são os arquivos reais)
   ALERTA_WEBHOOK_URL  webhook (Discord/Slack) para notificar falhas (opcional)
 """
 from __future__ import annotations
@@ -35,8 +35,12 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 # O endpoint do CEMADEN mostra só o presente. Uma execução retroativa (catchup) rotularia a foto de hoje
 # com data antiga, então a tarefa só coleta se a execução for recente.
 JANELA_RECENTE = timedelta(hours=12)
-# Endereço real, achado no DevTools do Mapa Interativo (aba Rede, Fetch/XHR). Devolve JSONP: estacoes([...]).
-CEMADEN_URL_PADRAO = "https://resources.cemaden.gov.br/dados/327mi_24.json?callback=estacoes"
+# Endereços reais, achados no DevTools do Mapa Interativo (aba Rede). Cada arquivo é de um tipo de estação e
+# devolve JSONP: estacoes([{"atualizado": "...", "estacao": [...]}]). O sufixo _24 sugere acumulado de 24 h (confirmar).
+CEMADEN_URLS_PADRAO = [
+    "https://resources.cemaden.gov.br/dados/311_24.json?callback=estacoes",    # pluviométricas (chuva)
+    "https://resources.cemaden.gov.br/dados/327mi_24.json?callback=estacoes",  # hidrológicas (nível de rio)
+]
 
 
 # --------------------------------------------------------------------------- utilidades
@@ -67,9 +71,10 @@ def _json_de_jsonp(texto: str):
 
 
 def _lista_estacoes(payload) -> list[dict]:
-    """O JSON vem como [{"estacao": [ {...}, {...} ]}]. Devolve a lista de estações."""
+    """O JSON vem como [{"atualizado": "...", "estacao": [ {...}, ... ]}]. Devolve as estações,
+    cada uma com o horário de atualização do arquivo (`atualizado_utc`), que é o horário da observação."""
     blocos = payload if isinstance(payload, list) else [payload]
-    return [e for b in blocos for e in b.get("estacao", [])]
+    return [{**e, "atualizado_utc": b.get("atualizado")} for b in blocos for e in b.get("estacao", [])]
 
 
 def notificar_falha(context) -> None:
@@ -123,18 +128,25 @@ def coletar_cemaden(data_interval_end, **_):
     if pendulum.now("UTC") - data_interval_end > JANELA_RECENTE:
         raise AirflowSkipException("Execução retroativa: o endpoint do CEMADEN só mostra o presente.")
 
-    url = Variable.get("CEMADEN_URL", CEMADEN_URL_PADRAO)
-    resp = requests.get(url, timeout=60, headers={"User-Agent": "Mozilla/5.0 (GS-FIAP Alerta Corrego)"})
-    resp.raise_for_status()
-    estacoes = _lista_estacoes(_json_de_jsonp(resp.text))
-    sp = [e for e in estacoes if e.get("uf") == "SP"]  # o arquivo cobre o Brasil: só SP vai para o pouso
-    if not sp:
-        raise ValueError(f"Nenhuma estação de SP em {len(estacoes)} estações recebidas: formato mudou?")
-    log.info("CEMADEN: %d estações no arquivo, %d em SP", len(estacoes), len(sp))
+    urls = json.loads(Variable.get("CEMADEN_URLS", json.dumps(CEMADEN_URLS_PADRAO)))
+    estacoes_sp, falhas = [], []
+    for url in urls:
+        try:
+            resp = requests.get(url, timeout=60, headers={"User-Agent": "Mozilla/5.0 (GS-FIAP Alerta Corrego)"})
+            resp.raise_for_status()
+            todas = _lista_estacoes(_json_de_jsonp(resp.text))
+            sp = [{**e, "origem_arquivo": url.split("?")[0].rsplit("/", 1)[-1]} for e in todas if e.get("uf") == "SP"]
+            log.info("CEMADEN %s: %d estações no arquivo, %d em SP", url, len(todas), len(sp))
+            estacoes_sp.extend(sp)
+        except Exception as exc:  # um arquivo fora do ar não derruba os outros, mas fica registrado
+            log.error("CEMADEN %s falhou: %s", url, exc)
+            falhas.append({"url": url, "erro": str(exc)[:200]})
+    if not estacoes_sp:
+        raise ValueError(f"Nenhuma estação de SP coletada. Falhas: {falhas}")
     _gravar(_arquivo("cemaden", data_interval_end), {
         "coletado_em_utc": pendulum.now("UTC").isoformat(),
-        "fonte": url, "total_estacoes_brasil": len(estacoes),
-        "dados": sp,  # sem outro tratamento: a Bronze guarda como veio
+        "fontes": urls, "falhas": falhas,
+        "dados": estacoes_sp,  # sem outro tratamento: a Bronze guarda como veio
     })
 
 
