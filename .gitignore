@@ -3,3 +3,7 @@ airflow_home/
 chegada/
 .env
 __pycache__/
+# Lotes temporários para ingestão no Databricks
+/lotes/
+/lote1_databricks.zip
+/lote2_databricks.zip
