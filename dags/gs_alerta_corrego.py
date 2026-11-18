@@ -35,6 +35,9 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 # O endpoint do CEMADEN mostra só o presente. Uma execução retroativa (catchup) rotularia a foto de hoje
 # com data antiga, então a tarefa só coleta se a execução for recente.
 JANELA_RECENTE = timedelta(hours=12)
+# No Airflow 3, um cron em string usa CronTriggerTimetable com intervalo de dados VAZIO (início == fim).
+# Por isso a janela de cada execução é calculada aqui: as 6 h que terminam no horário da execução.
+PASSO_EXECUCAO = timedelta(hours=6)
 # Endereços reais, achados no DevTools do Mapa Interativo (aba Rede). Cada arquivo é de um tipo de estação e
 # devolve JSONP: estacoes([{"atualizado": "...", "estacao": [...]}]). O sufixo _24 sugere acumulado de 24 h (confirmar).
 CEMADEN_URLS_PADRAO = [
@@ -46,6 +49,13 @@ CEMADEN_URLS_PADRAO = [
 # --------------------------------------------------------------------------- utilidades
 def _chegada() -> Path:
     return Path(Variable.get("CHEGADA_DIR", "/opt/airflow/chegada"))
+
+
+def _janela(data_interval_start, data_interval_end):
+    """Devolve (início, fim) da janela de dados da execução, mesmo quando o intervalo do Airflow é vazio."""
+    if data_interval_end - data_interval_start < timedelta(minutes=1):
+        data_interval_start = data_interval_end - PASSO_EXECUCAO
+    return data_interval_start, data_interval_end
 
 
 def _arquivo(fonte: str, data_interval_end) -> Path:
@@ -93,6 +103,7 @@ def notificar_falha(context) -> None:
 # --------------------------------------------------------------------------- tarefas
 def coletar_chuva(data_interval_start, data_interval_end, **_):
     """Chuva horária (mm) do Open-Meteo para os 4 pontos. Fonte externa real, sem chave."""
+    data_interval_start, data_interval_end = _janela(data_interval_start, data_interval_end)
     # Janela com 1 dia de folga antes (aquecimento do modelo de nível) e 1 dia depois (previsão).
     inicio = (data_interval_start - timedelta(days=1)).in_timezone("America/Sao_Paulo").date()
     fim = (data_interval_end + timedelta(days=1)).in_timezone("America/Sao_Paulo").date()
@@ -161,6 +172,7 @@ def gerar_cadastro(data_interval_end, **_):
 
 def gerar_sensores(data_interval_start, data_interval_end, **_):
     """Nível do córrego SIMULADO a partir da chuva real que acabou de ser coletada."""
+    data_interval_start, data_interval_end = _janela(data_interval_start, data_interval_end)
     arq_chuva = _arquivo("chuva", data_interval_end)
     chuva = json.loads(arq_chuva.read_text(encoding="utf-8"))
     chuva_por_ponto = {
@@ -168,6 +180,8 @@ def gerar_sensores(data_interval_start, data_interval_end, **_):
         for p in chuva["pontos"]
     }
     leituras = geradores.gerar_leituras_nivel(chuva_por_ponto, data_interval_start, data_interval_end)
+    if not leituras:  # janela vazia seria falha silenciosa: melhor quebrar e deixar o retry/notificação agirem
+        raise AirflowFailException(f"Nenhuma leitura gerada para a janela {data_interval_start} -> {data_interval_end}")
     _gravar(_arquivo("sensor", data_interval_end), {
         "gerado_em": data_interval_end.isoformat(), "simulado": True,
         "modelo": "reservatorio_linear(base, ganho_cm_mm, tau_h) + ruido + falhas injetadas",
