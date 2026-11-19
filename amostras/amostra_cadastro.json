@@ -1,0 +1,22 @@
+{
+  "gerado_em": "2026-11-18T12:00:00+00:00",
+  "sintetico": true,
+  "moradores": [
+    {
+      "morador_id": "M-JD_PANTANAL-20261118T1200-00",
+      "ponto_id": "JD_PANTANAL",
+      "canal": "SMS",
+      "consentimento": true,
+      "evento": "cadastro",
+      "atualizado_em": "2026-11-18T12:00:00+00:00"
+    },
+    {
+      "morador_id": "M-JD_PANTANAL-20261118T1200-01",
+      "ponto_id": "JD_PANTANAL",
+      "canal": "SMS",
+      "consentimento": true,
+      "evento": "cadastro",
+      "atualizado_em": "2026-11-18T12:00:00+00:00"
+    }
+  ]
+}

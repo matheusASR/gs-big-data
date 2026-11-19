@@ -1,0 +1,50 @@
+{
+  "coletado_em_utc": "2026-11-18T13:11:01.620886+00:00",
+  "fontes": [
+    "https://resources.cemaden.gov.br/dados/311_24.json?callback=estacoes",
+    "https://resources.cemaden.gov.br/dados/327mi_24.json?callback=estacoes"
+  ],
+  "falhas": [],
+  "dados": [
+    {
+      "acumulado": 0.0,
+      "cidade": "VOTORANTIM",
+      "codestacao": "355700601A",
+      "codibge": 3557006,
+      "idestacao": 3017,
+      "idmunicipio": 2513,
+      "idrede": 11,
+      "idtipoestacao": 1,
+      "latitude": -23.545,
+      "longitude": -47.447,
+      "nomeestacao": "Centro",
+      "nomerede": "Centro Nacional de Monitoramento e Alertas de Desastres Naturais",
+      "sigla": "CEMADEN",
+      "status": 0,
+      "tipoestacao": "Pluviométrica",
+      "uf": "SP",
+      "atualizado_utc": "2026-11-18 13:10:46 UTC",
+      "origem_arquivo": "311_24.json"
+    },
+    {
+      "acumulado": 2.36,
+      "cidade": "REGISTRO",
+      "codestacao": "354260201A",
+      "codibge": 3542602,
+      "idestacao": 3018,
+      "idmunicipio": 2357,
+      "idrede": 11,
+      "idtipoestacao": 1,
+      "latitude": -24.4945,
+      "longitude": -47.8468,
+      "nomeestacao": "Registro",
+      "nomerede": "Centro Nacional de Monitoramento e Alertas de Desastres Naturais",
+      "sigla": "CEMADEN",
+      "status": 0,
+      "tipoestacao": "Pluviométrica",
+      "uf": "SP",
+      "atualizado_utc": "2026-11-18 13:10:46 UTC",
+      "origem_arquivo": "311_24.json"
+    }
+  ]
+}

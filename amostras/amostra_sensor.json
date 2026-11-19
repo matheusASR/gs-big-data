@@ -1,0 +1,25 @@
+{
+  "gerado_em": "2026-11-18T12:00:00+00:00",
+  "simulado": true,
+  "modelo": "reservatorio_linear(base, ganho_cm_mm, tau_h) + ruido + falhas injetadas",
+  "leituras": [
+    {
+      "ponto_id": "JD_PANTANAL",
+      "data_hora": "2026-11-18T03:00:00-03:00",
+      "nivel_cm": 45.5,
+      "origem": "simulado"
+    },
+    {
+      "ponto_id": "JD_PANTANAL",
+      "data_hora": "2026-11-18T03:10:00-03:00",
+      "nivel_cm": 43.6,
+      "origem": "simulado"
+    },
+    {
+      "ponto_id": "JD_PANTANAL",
+      "data_hora": "2026-11-18T03:20:00-03:00",
+      "nivel_cm": 44.1,
+      "origem": "simulado"
+    }
+  ]
+}
